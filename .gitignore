@@ -39,3 +39,23 @@
 
 # debug information files
 *.dwo
+
+# PlatformIO
+.pio/
+.vscode/
+.clang_complete
+.gcc-flags.json
+src/
+
+# ESP-IDF
+build/
+sdkconfig
+sdkconfig.old
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
