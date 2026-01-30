@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS 
+        "../src/main.cpp"
+        "../src/gps_driver.c"
+        "../src/oled_display.c"
+        "../src/ntp_server.c"
+    INCLUDE_DIRS 
+        "../include"
+    REQUIRES 
+        nvs_flash 
+        esp_wifi 
+        esp_netif 
+        esp_event
+        driver
+        lwip
+)

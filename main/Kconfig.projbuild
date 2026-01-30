@@ -1,0 +1,15 @@
+menu "WiFi Configuration"
+
+    config WIFI_SSID
+        string "WiFi SSID"
+        default "YourSSID"
+        help
+            SSID (network name) for the device to connect to.
+
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default "YourPassword"
+        help
+            WiFi password (WPA or WPA2) for the device to use.
+
+endmenu

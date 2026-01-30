@@ -1,0 +1,136 @@
+ESP32-S3 GPS NTP Server - Schematic Diagram
+============================================
+
+                                    +------------------+
+                                    |   GPS Antenna    |
+                                    +--------+---------+
+                                             |
+                                             | Coax Cable
+                                             |
+                         +-------------------v--------------------+
+                         |      ATGM336M GPS Module               |
+                         |                                        |
+                         |  VCC  GND   TX   RX   PPS             |
+                         +---+----+----+----+----+----------------+
+                             |    |    |    |    |
+                            3.3V GND   |    |    |
+                             |    |    |    |    |
+                             |    |    |    |    | PPS Signal (1Hz)
+                             |    |    |    |    |
+                  +----------+----+----+----+----+----------+
+                  |          |    |    |    |    |          |
+                  |  3.3V   GND  G44  G43  G1              |
+                  |                                         |
+                  |    Seeed Studios Xiao ESP32-S3         |
+                  |                                         |
+                  |  G5   G6   3.3V  GND                   |
+                  |   |    |    |     |                     |
+                  +---+----+----+-----+---------------------+
+                      |    |    |     |
+                      |    |    |     |
+                 I2C  |    |   3.3V  GND
+                 SDA  |    |    |     |
+                      |    |    |     |
+               +------+----+----+-----+---------+
+               |      |    |    |     |         |
+               |     SDA  SCL  VCC   GND        |
+               |                                |
+               |   0.91" OLED Display           |
+               |   128x32 (SSD1306)             |
+               |                                |
+               +--------------------------------+
+
+
+Signal Descriptions:
+====================
+
+UART (GPS ↔ ESP32-S3):
+----------------------
+- GPIO 43 (ESP32 TX) → GPS RX: Commands to GPS module
+- GPIO 44 (ESP32 RX) → GPS TX: NMEA sentences from GPS
+- Baud Rate: 9600 bps
+- Protocol: 8N1 (8 data bits, no parity, 1 stop bit)
+
+PPS (GPS → ESP32-S3):
+---------------------
+- GPIO 1: Pulse Per Second signal
+- 1 pulse per second (1Hz) when GPS has valid fix
+- Rising edge triggers interrupt for precise timing
+- Pulse width: ~100ms
+
+I2C (OLED ↔ ESP32-S3):
+----------------------
+- GPIO 5 (SDA): I2C data line
+- GPIO 6 (SCL): I2C clock line
+- Clock Speed: 400kHz (Fast Mode)
+- Address: 0x3C (default for most SSD1306)
+- Pull-ups: Usually built into OLED module
+
+Power:
+------
+- Input: USB-C 5V
+- ESP32-S3: 3.3V (on-board regulator)
+- GPS Module: 3.3V @ ~30mA
+- OLED Display: 3.3V @ ~20mA
+- Total Current: ~150-200mA typical
+
+
+Pin Mapping Summary:
+===================
+
+ESP32-S3 GPIO | Function      | Connected To
+-------------|---------------|------------------
+GPIO 1       | PPS Input     | GPS PPS output
+GPIO 5       | I2C SDA       | OLED SDA
+GPIO 6       | I2C SCL       | OLED SCL
+GPIO 43      | UART TX       | GPS RX
+GPIO 44      | UART RX       | GPS TX
+3.3V         | Power Out     | GPS VCC, OLED VCC
+GND          | Ground        | GPS GND, OLED GND
+
+
+Connection Notes:
+=================
+
+1. UART Connection:
+   - TX on ESP32 connects to RX on GPS (crossed)
+   - RX on ESP32 connects to TX on GPS (crossed)
+   - This is standard UART wiring
+
+2. PPS Connection:
+   - Critical for time accuracy
+   - Must be connected to support sub-millisecond precision
+   - Without PPS, system still works but with lower precision
+
+3. I2C Connection:
+   - SDA and SCL should have pull-up resistors
+   - Most OLED modules include built-in pull-ups
+   - If not, add 4.7kΩ resistors to 3.3V
+
+4. Power Distribution:
+   - All components share common 3.3V and GND
+   - 3.3V provided by ESP32-S3's on-board regulator
+   - USB-C provides 5V input to ESP32-S3
+
+5. Optional Components:
+   - 100nF ceramic capacitors near each IC for noise reduction
+   - 10µF electrolytic capacitor near power input
+   - LED indicators for status (if desired)
+
+
+Typical NMEA Sentences from GPS:
+================================
+
+$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47
+  - Time: 12:35:19 UTC
+  - Latitude: 48°07.038'N
+  - Longitude: 11°31.000'E
+  - Fix quality: 1 (GPS fix)
+  - Satellites: 8
+  - Altitude: 545.4m
+
+$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A
+  - Time: 12:35:19 UTC
+  - Status: A (Active/Valid)
+  - Date: 23/03/1994
+  - Speed and course information
