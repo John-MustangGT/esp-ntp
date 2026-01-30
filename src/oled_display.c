@@ -154,7 +154,15 @@ static esp_err_t oled_write_command(uint8_t cmd)
  */
 static esp_err_t oled_write_data(uint8_t *data, size_t len)
 {
-    uint8_t buffer[len + 1];
+    // Use fixed buffer to avoid VLA and stack overflow
+    #define OLED_WRITE_BUFFER_SIZE 129  // 1 byte control + 128 bytes data max
+    static uint8_t buffer[OLED_WRITE_BUFFER_SIZE];
+    
+    if (len >= OLED_WRITE_BUFFER_SIZE) {
+        ESP_LOGE(TAG, "Data too large for OLED write buffer");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    
     buffer[0] = 0x40;
     memcpy(buffer + 1, data, len);
     return i2c_master_write_to_device(I2C_MASTER_NUM, OLED_I2C_ADDRESS, buffer, len + 1, pdMS_TO_TICKS(1000));

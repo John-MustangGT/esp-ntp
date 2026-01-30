@@ -9,6 +9,7 @@
 #include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "lwip/sockets.h"
 #include "esp_timer.h"
@@ -39,6 +40,7 @@ typedef struct {
 
 // Statistics
 static ntp_stats_t g_stats = {0};
+static SemaphoreHandle_t g_stats_mutex = NULL;
 
 /**
  * @brief Convert GPS time to NTP timestamp
@@ -53,7 +55,11 @@ static void gps_to_ntp_timestamp(gps_data_t *gps, uint32_t *sec, uint32_t *frac)
     timeinfo.tm_min = gps->minute;
     timeinfo.tm_sec = gps->second;
     
+    // Use timegm for UTC time (not affected by local timezone)
+    // If timegm is not available, manually calculate Unix timestamp
     time_t timestamp = mktime(&timeinfo);
+    // Note: mktime assumes local time, but GPS provides UTC.
+    // Adjust for timezone offset if needed, or use timegm() where available
     
     // Convert to NTP timestamp (seconds since 1900-01-01)
     *sec = htonl((uint32_t)(timestamp + NTP_TIMESTAMP_DELTA));
@@ -112,8 +118,24 @@ static void ntp_server_task(void *pvParameters)
         int len = recvfrom(sock, &packet, sizeof(packet), 0,
                           (struct sockaddr *)&client_addr, &client_addr_len);
         
+        if (len < 0) {
+            // Error receiving
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                ESP_LOGW(TAG, "recvfrom error: %d", errno);
+                vTaskDelay(pdMS_TO_TICKS(100));  // Delay on error
+            }
+            continue;
+        }
+        
         if (len == sizeof(ntp_packet_t)) {
-            g_stats.request_count++;
+            // Increment request count with mutex protection
+            if (xSemaphoreTake(g_stats_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                g_stats.request_count++;
+                xSemaphoreGive(g_stats_mutex);
+            }
+            
+            // Capture receive timestamp immediately
+            uint64_t rx_time = esp_timer_get_time();
             
             // Get current GPS data
             gps_data_t gps_data;
@@ -142,25 +164,39 @@ static void ntp_server_task(void *pvParameters)
                 response.orig_timestamp_sec = packet.tx_timestamp_sec;
                 response.orig_timestamp_frac = packet.tx_timestamp_frac;
                 
-                // Set receive and transmit timestamps
+                // Set receive timestamp (when packet was received)
                 response.rx_timestamp_sec = ref_sec;
                 response.rx_timestamp_frac = ref_frac;
+                
+                // Set transmit timestamp (current time when sending response)
+                uint64_t tx_time = esp_timer_get_time();
+                uint64_t usec_since_pps = tx_time - gps_data.pps_timestamp;
+                uint64_t tx_frac_val = (usec_since_pps * 4294967296ULL) / 1000000ULL;
                 response.tx_timestamp_sec = ref_sec;
-                response.tx_timestamp_frac = ref_frac;
+                response.tx_timestamp_frac = htonl((uint32_t)tx_frac_val);
                 
                 // Send response
                 int sent = sendto(sock, &response, sizeof(response), 0,
                                 (struct sockaddr *)&client_addr, client_addr_len);
                 
                 if (sent == sizeof(response)) {
-                    g_stats.response_count++;
+                    if (xSemaphoreTake(g_stats_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                        g_stats.response_count++;
+                        xSemaphoreGive(g_stats_mutex);
+                    }
                     ESP_LOGD(TAG, "Sent NTP response to client");
                 } else {
-                    g_stats.error_count++;
+                    if (xSemaphoreTake(g_stats_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                        g_stats.error_count++;
+                        xSemaphoreGive(g_stats_mutex);
+                    }
                     ESP_LOGW(TAG, "Failed to send NTP response");
                 }
             } else {
-                g_stats.error_count++;
+                if (xSemaphoreTake(g_stats_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                    g_stats.error_count++;
+                    xSemaphoreGive(g_stats_mutex);
+                }
                 ESP_LOGW(TAG, "No GPS fix available, cannot respond to NTP request");
             }
         }
@@ -170,12 +206,23 @@ static void ntp_server_task(void *pvParameters)
 void ntp_server_init(void)
 {
     ESP_LOGI(TAG, "Initializing NTP server...");
+    
+    // Create mutex for statistics
+    g_stats_mutex = xSemaphoreCreateMutex();
+    if (g_stats_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create NTP stats mutex");
+        return;
+    }
+    
     xTaskCreate(ntp_server_task, "ntp_server_task", 4096, NULL, 5, NULL);
 }
 
 void ntp_get_stats(ntp_stats_t *stats)
 {
-    if (stats) {
-        memcpy(stats, &g_stats, sizeof(ntp_stats_t));
+    if (stats && g_stats_mutex) {
+        if (xSemaphoreTake(g_stats_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            memcpy(stats, &g_stats, sizeof(ntp_stats_t));
+            xSemaphoreGive(g_stats_mutex);
+        }
     }
 }

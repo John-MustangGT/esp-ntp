@@ -99,8 +99,22 @@ void wifi_init_sta(void)
                                                         &instance_got_ip));
 
     wifi_config_t wifi_config = {};
-    strncpy((char*)wifi_config.sta.ssid, WIFI_SSID, sizeof(wifi_config.sta.ssid));
-    strncpy((char*)wifi_config.sta.password, WIFI_PASSWORD, sizeof(wifi_config.sta.password));
+    // Safely copy SSID and password ensuring null termination
+    size_t ssid_len = strlen(WIFI_SSID);
+    size_t pass_len = strlen(WIFI_PASSWORD);
+    
+    if (ssid_len >= sizeof(wifi_config.sta.ssid)) {
+        ssid_len = sizeof(wifi_config.sta.ssid) - 1;
+    }
+    if (pass_len >= sizeof(wifi_config.sta.password)) {
+        pass_len = sizeof(wifi_config.sta.password) - 1;
+    }
+    
+    memcpy(wifi_config.sta.ssid, WIFI_SSID, ssid_len);
+    wifi_config.sta.ssid[ssid_len] = '\0';
+    memcpy(wifi_config.sta.password, WIFI_PASSWORD, pass_len);
+    wifi_config.sta.password[pass_len] = '\0';
+    
     wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     wifi_config.sta.pmf_cfg.capable = true;
     wifi_config.sta.pmf_cfg.required = false;

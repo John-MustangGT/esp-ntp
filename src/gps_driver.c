@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
@@ -30,6 +31,7 @@ static const char *TAG = "GPS";
 static gps_data_t g_gps_data = {0};
 static bool g_data_valid = false;
 static uint64_t g_pps_timestamp = 0;
+static SemaphoreHandle_t g_gps_mutex = NULL;
 
 // NMEA parser state
 static char nmea_buffer[256];
@@ -78,42 +80,85 @@ static void parse_gpgga(const char *sentence)
     
     while (token != NULL && field < 15) {
         switch (field) {
-            case 1: // Time
+            case 1: // Time (HHMMSS or HHMMSS.sss)
                 if (strlen(token) >= 6) {
-                    g_gps_data.hour = (token[0] - '0') * 10 + (token[1] - '0');
-                    g_gps_data.minute = (token[2] - '0') * 10 + (token[3] - '0');
-                    g_gps_data.second = (token[4] - '0') * 10 + (token[5] - '0');
+                    // Validate digits
+                    if (token[0] >= '0' && token[0] <= '9' &&
+                        token[1] >= '0' && token[1] <= '9' &&
+                        token[2] >= '0' && token[2] <= '9' &&
+                        token[3] >= '0' && token[3] <= '9' &&
+                        token[4] >= '0' && token[4] <= '9' &&
+                        token[5] >= '0' && token[5] <= '9') {
+                        
+                        int hour = (token[0] - '0') * 10 + (token[1] - '0');
+                        int minute = (token[2] - '0') * 10 + (token[3] - '0');
+                        int second = (token[4] - '0') * 10 + (token[5] - '0');
+                        
+                        // Validate ranges
+                        if (hour >= 0 && hour <= 23 &&
+                            minute >= 0 && minute <= 59 &&
+                            second >= 0 && second <= 59) {
+                            
+                            if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                                g_gps_data.hour = hour;
+                                g_gps_data.minute = minute;
+                                g_gps_data.second = second;
+                                xSemaphoreGive(g_gps_mutex);
+                            }
+                        }
+                    }
                 }
                 break;
             case 2: // Latitude
                 if (strlen(token) > 0) {
-                    g_gps_data.latitude = atof(token);
+                    if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                        g_gps_data.latitude = atof(token);
+                        xSemaphoreGive(g_gps_mutex);
+                    }
                 }
                 break;
             case 3: // N/S
                 if (token[0] == 'S') {
-                    g_gps_data.latitude = -g_gps_data.latitude;
+                    if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                        g_gps_data.latitude = -g_gps_data.latitude;
+                        xSemaphoreGive(g_gps_mutex);
+                    }
                 }
                 break;
             case 4: // Longitude
                 if (strlen(token) > 0) {
-                    g_gps_data.longitude = atof(token);
+                    if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                        g_gps_data.longitude = atof(token);
+                        xSemaphoreGive(g_gps_mutex);
+                    }
                 }
                 break;
             case 5: // E/W
                 if (token[0] == 'W') {
-                    g_gps_data.longitude = -g_gps_data.longitude;
+                    if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                        g_gps_data.longitude = -g_gps_data.longitude;
+                        xSemaphoreGive(g_gps_mutex);
+                    }
                 }
                 break;
             case 6: // Fix quality
-                g_gps_data.fix_valid = (token[0] != '0');
+                if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                    g_gps_data.fix_valid = (token[0] != '0');
+                    xSemaphoreGive(g_gps_mutex);
+                }
                 break;
             case 7: // Number of satellites
-                g_gps_data.satellites = atoi(token);
+                if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                    g_gps_data.satellites = atoi(token);
+                    xSemaphoreGive(g_gps_mutex);
+                }
                 break;
             case 9: // Altitude
                 if (strlen(token) > 0) {
-                    g_gps_data.altitude = atof(token);
+                    if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                        g_gps_data.altitude = atof(token);
+                        xSemaphoreGive(g_gps_mutex);
+                    }
                 }
                 break;
         }
@@ -138,21 +183,68 @@ static void parse_gprmc(const char *sentence)
     
     while (token != NULL && field < 12) {
         switch (field) {
-            case 1: // Time
+            case 1: // Time (HHMMSS or HHMMSS.sss)
                 if (strlen(token) >= 6) {
-                    g_gps_data.hour = (token[0] - '0') * 10 + (token[1] - '0');
-                    g_gps_data.minute = (token[2] - '0') * 10 + (token[3] - '0');
-                    g_gps_data.second = (token[4] - '0') * 10 + (token[5] - '0');
+                    // Validate digits
+                    if (token[0] >= '0' && token[0] <= '9' &&
+                        token[1] >= '0' && token[1] <= '9' &&
+                        token[2] >= '0' && token[2] <= '9' &&
+                        token[3] >= '0' && token[3] <= '9' &&
+                        token[4] >= '0' && token[4] <= '9' &&
+                        token[5] >= '0' && token[5] <= '9') {
+                        
+                        int hour = (token[0] - '0') * 10 + (token[1] - '0');
+                        int minute = (token[2] - '0') * 10 + (token[3] - '0');
+                        int second = (token[4] - '0') * 10 + (token[5] - '0');
+                        
+                        // Validate ranges
+                        if (hour >= 0 && hour <= 23 &&
+                            minute >= 0 && minute <= 59 &&
+                            second >= 0 && second <= 59) {
+                            
+                            if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                                g_gps_data.hour = hour;
+                                g_gps_data.minute = minute;
+                                g_gps_data.second = second;
+                                xSemaphoreGive(g_gps_mutex);
+                            }
+                        }
+                    }
                 }
                 break;
             case 2: // Status
-                g_gps_data.fix_valid = (token[0] == 'A');
+                if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                    g_gps_data.fix_valid = (token[0] == 'A');
+                    xSemaphoreGive(g_gps_mutex);
+                }
                 break;
-            case 9: // Date
+            case 9: // Date (DDMMYY)
                 if (strlen(token) >= 6) {
-                    g_gps_data.day = (token[0] - '0') * 10 + (token[1] - '0');
-                    g_gps_data.month = (token[2] - '0') * 10 + (token[3] - '0');
-                    g_gps_data.year = 2000 + (token[4] - '0') * 10 + (token[5] - '0');
+                    // Validate digits
+                    if (token[0] >= '0' && token[0] <= '9' &&
+                        token[1] >= '0' && token[1] <= '9' &&
+                        token[2] >= '0' && token[2] <= '9' &&
+                        token[3] >= '0' && token[3] <= '9' &&
+                        token[4] >= '0' && token[4] <= '9' &&
+                        token[5] >= '0' && token[5] <= '9') {
+                        
+                        int day = (token[0] - '0') * 10 + (token[1] - '0');
+                        int month = (token[2] - '0') * 10 + (token[3] - '0');
+                        int year = 2000 + (token[4] - '0') * 10 + (token[5] - '0');
+                        
+                        // Validate ranges
+                        if (day >= 1 && day <= 31 &&
+                            month >= 1 && month <= 12 &&
+                            year >= 2000 && year <= 2099) {
+                            
+                            if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+                                g_gps_data.day = day;
+                                g_gps_data.month = month;
+                                g_gps_data.year = year;
+                                xSemaphoreGive(g_gps_mutex);
+                            }
+                        }
+                    }
                 }
                 break;
         }
@@ -211,6 +303,13 @@ void gps_init(void)
 {
     ESP_LOGI(TAG, "Initializing GPS driver...");
     
+    // Create mutex for thread safety
+    g_gps_mutex = xSemaphoreCreateMutex();
+    if (g_gps_mutex == NULL) {
+        ESP_LOGE(TAG, "Failed to create GPS mutex");
+        return;
+    }
+    
     // Configure UART
     uart_config_t uart_config = {
         .baud_rate = GPS_UART_BAUD_RATE,
@@ -247,12 +346,23 @@ void gps_init(void)
 
 bool gps_get_data(gps_data_t *data)
 {
-    if (!g_data_valid || !data) {
+    if (!data) {
         return false;
     }
     
-    memcpy(data, &g_gps_data, sizeof(gps_data_t));
-    return true;
+    if (xSemaphoreTake(g_gps_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (!g_data_valid) {
+            xSemaphoreGive(g_gps_mutex);
+            return false;
+        }
+        
+        memcpy(data, &g_gps_data, sizeof(gps_data_t));
+        data->pps_timestamp = g_pps_timestamp;  // Populate PPS timestamp
+        xSemaphoreGive(g_gps_mutex);
+        return true;
+    }
+    
+    return false;
 }
 
 uint64_t gps_get_pps_timestamp(void)
